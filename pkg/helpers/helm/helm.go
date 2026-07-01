@@ -243,6 +243,8 @@ func (h *Helm) InstallChart(name, repo, chart, version string) {
 
 	if h.clusteradmFlags.DryRun {
 		fmt.Println(release.Manifest)
+	} else if len(release.Info.Notes) > 0 {
+		fmt.Println(release.Info.Notes)
 	}
 }
 
