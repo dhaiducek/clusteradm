@@ -46,7 +46,7 @@ func NewCmd(clusteradmFlags *genericclioptionsclusteradm.ClusteradmFlags, stream
 
 	cmd.Flags().StringVar(&o.outputFile, "output-file", "", "The generated resources will be copied in the specified file")
 	cmd.Flags().BoolVar(&o.useBootstrapToken, "use-bootstrap-token", false, "If set then the bootstrap token will used instead of a service account token")
-	cmd.Flags().StringVarP(&o.output, "output", "o", "text", "output should be json or text")
+	cmd.Flags().StringVarP(&o.output, "output", "o", "text", "output should be json, text, or raw")
 
 	return cmd
 }
