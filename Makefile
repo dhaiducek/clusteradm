@@ -105,7 +105,7 @@ check-copyright:
 
 .PHONY: test
 test: deps envtest-setup
-	@build/run-unit-tests.sh
+	@KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" build/run-unit-tests.sh
 
 .PHONY: clean-test
 clean-test: 
