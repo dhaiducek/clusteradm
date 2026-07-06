@@ -8,9 +8,6 @@ on:
   pull_request:
     branches: [ main, release-* ]
 
-env:
-  GO_VERSION: '1.26'
-
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -19,7 +16,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e #v7
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
       - name: verify
         run: make verify
 
@@ -28,16 +25,14 @@ jobs:
     env:
       GOPATH: /tmp/go
     steps:
+    - name: Check out code
+      uses: actions/checkout@v3
     - name: Set up Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e #v7
       with:
-        go-version: ${{ env.GO_VERSION }}
+        go-version-file: go.mod
     - name: Create GOPATH src directory
       run: mkdir -p $GOPATH/src/github.com/open-cluster-management
-    - name: Check out code
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7
-      with:
-        fetch-depth: 1
     - name: Copy the code into the GOPATH
       run: cp -r . $GOPATH/src/github.com/open-cluster-management/clusteradm
     - name: Unit Tests
@@ -47,22 +42,24 @@ jobs:
   integration-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7
+    - name: Check out code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7
     - name: Set up Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e #v7
       with:
-        go-version: ${{ env.GO_VERSION }}
+        go-version-file: go.mod
     - name: Integration Tests
       run: make test-integration
   
   e2e-test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7
+    - name: Check out code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7
     - name: Set up Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e #v7
       with:
-        go-version: ${{ env.GO_VERSION }}
+        go-version-file: go.mod
     - name: E2E Tests
       run: |
         BUNDLE_VERSION=$([[ "${{ github.base_ref }}" == "main" ]] && echo latest || echo default) \
