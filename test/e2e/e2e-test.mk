@@ -17,8 +17,8 @@ clean-e2e:
 # start clusters and set context variables
 start-cluster: 
 	kind create cluster --name ${MANAGED_CLUSTER1_NAME}
-	kind create cluster --name ${HUB_NAME} --image kindest/node:v1.24.0
-.PHONY: start-cluster 
+	kind create cluster --name ${HUB_NAME} --image kindest/node:v1.35.8@sha256:07b2536e30b803ed61d1677a79df6115f798ce64c80f9e22f6ed45afd09323c0
+.PHONY: start-cluster
 
 test-e2e: clean-e2e envtest-setup ensure-ginkgo start-cluster deps install
 	go test -c ./test/e2e/clusteradm
