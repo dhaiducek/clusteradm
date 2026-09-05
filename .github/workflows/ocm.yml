@@ -12,8 +12,10 @@ jobs:
     e2e-test:
         runs-on: ubuntu-latest
         steps:
-        - run: echo ${{ github.event.client_payload.ref }}
-        - run: echo ${{ github.event.client_payload.sha }}
+        - name: Git Ref ${{ github.event.client_payload.ref }}
+          run: ":"
+        - name: Git SHA ${{ github.event.client_payload.sha }}
+          run: ":"
         - name: Check out code
           uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7
           with:
