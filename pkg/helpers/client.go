@@ -202,26 +202,65 @@ func IsKlusterletsInstalled(apiExtensionsClient apiextensionsclient.Interface) (
 	return false, err
 }
 
-// WatchUntil starts a watch stream and holds until the condition is satisfied.
+// WatchUntil starts a watch stream and holds until the condition is satisfied
+// or ctx is done. Kubernetes watch streams can close for reasons other than the
+// intended wait timeout (API server timeouts, dropped connections, Error
+// events). Those are retried until the parent context is canceled or its
+// deadline expires.
 func WatchUntil(
+	ctx context.Context,
 	watchFunc func() (watch.Interface, error),
 	assertEvent func(event watch.Event) bool) error {
-	w, err := watchFunc()
-	if err != nil {
-		return err
-	}
-	defer w.Stop()
 	for {
-		event, ok := <-w.ResultChan()
-		if !ok { // The channel is closed by Kubernetes, thus, user should check the pod status manually
-			return fmt.Errorf("unexpected watch event received")
+		if err := ctx.Err(); err != nil {
+			return watchCtxError(err)
 		}
 
-		if assertEvent(event) {
-			break
+		w, err := watchFunc()
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return watchCtxError(ctxErr)
+			}
+			return err
+		}
+
+		matched, err := consumeWatch(ctx, w, assertEvent)
+		w.Stop()
+		if matched {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		// Channel closed or Error event; retry while the parent context remains.
+	}
+}
+
+// consumeWatch reads events until the condition matches, the watch ends, or
+// ctx is done. A match returns (true, nil). A closed channel or Error event
+// returns (false, nil) so the caller can start a new watch. Context
+// cancellation or deadline expiry is returned as a wrapped ctx.Err().
+func consumeWatch(ctx context.Context, w watch.Interface, assertEvent func(event watch.Event) bool) (bool, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return false, watchCtxError(ctx.Err())
+		case event, ok := <-w.ResultChan():
+			if !ok || event.Type == watch.Error {
+				return false, nil
+			}
+			if assertEvent(event) {
+				return true, nil
+			}
 		}
 	}
-	return nil
+}
+
+func watchCtxError(err error) error {
+	if err == context.Canceled {
+		return fmt.Errorf("watch canceled: %w", err)
+	}
+	return fmt.Errorf("watch timed out: %w", err)
 }
 
 // CreateRESTConfigFromClientcmdapiv1Config

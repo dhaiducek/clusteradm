@@ -372,7 +372,7 @@ func (o *Options) validate() error {
 	return nil
 }
 
-func (o *Options) run() error {
+func (o *Options) run(ctx context.Context) error {
 	f := o.ClusteradmFlags.KubectlFactory
 	if o.capiOptions.Enable {
 		getter, err := o.capiOptions.ToClientGetter()
@@ -399,7 +399,7 @@ func (o *Options) run() error {
 
 	r := reader.NewResourceReader(f, o.ClusteradmFlags.DryRun, o.Streams)
 
-	if err = o.applyKlusterlet(r, operatorClient, apiExtensionsClient); err != nil {
+	if err = o.applyKlusterlet(ctx, r, operatorClient, apiExtensionsClient); err != nil {
 		return err
 	}
 
@@ -424,7 +424,7 @@ func (o *Options) run() error {
 
 }
 
-func (o *Options) applyKlusterlet(r *reader.ResourceReader, operatorClient operatorclient.Interface, apiExtensionsClient apiextensionsclient.Interface) error {
+func (o *Options) applyKlusterlet(ctx context.Context, r *reader.ResourceReader, operatorClient operatorclient.Interface, apiExtensionsClient apiextensionsclient.Interface) error {
 	available, err := checkIfRegistrationOperatorAvailable(o.ClusteradmFlags.KubectlFactory)
 	if err != nil {
 		return err
@@ -459,7 +459,7 @@ func (o *Options) applyKlusterlet(r *reader.ResourceReader, operatorClient opera
 
 	if !available && o.wait && !o.ClusteradmFlags.DryRun {
 		err = waitUntilRegistrationOperatorConditionIsTrue(
-			o.Streams.Out, o.ClusteradmFlags.KubectlFactory, int64(o.ClusteradmFlags.Timeout))
+			ctx, o.Streams.Out, o.ClusteradmFlags.KubectlFactory, int64(o.ClusteradmFlags.Timeout))
 		if err != nil {
 			return err
 		}
@@ -468,19 +468,19 @@ func (o *Options) applyKlusterlet(r *reader.ResourceReader, operatorClient opera
 	if o.wait && !o.ClusteradmFlags.DryRun {
 		if o.mode == string(operatorv1.InstallModeHosted) {
 			err = waitUntilKlusterletConditionIsTrue(
-				o.Streams.Out, operatorClient, int64(o.ClusteradmFlags.Timeout), o.klusterletChartConfig.Klusterlet.Name)
+				ctx, o.Streams.Out, operatorClient, int64(o.ClusteradmFlags.Timeout), o.klusterletChartConfig.Klusterlet.Name)
 			if err != nil {
 				return err
 			}
 		} else {
 			err = waitUntilKlusterletConditionIsTrue(
-				o.Streams.Out, operatorClient, int64(o.ClusteradmFlags.Timeout), o.klusterletChartConfig.Klusterlet.Name)
+				ctx, o.Streams.Out, operatorClient, int64(o.ClusteradmFlags.Timeout), o.klusterletChartConfig.Klusterlet.Name)
 			if err != nil {
 				return err
 			}
 		}
 
-		err = o.waitUntilManagedClusterIsCreated(int64(o.ClusteradmFlags.Timeout), o.klusterletChartConfig.Klusterlet.ClusterName)
+		err = o.waitUntilManagedClusterIsCreated(ctx, int64(o.ClusteradmFlags.Timeout), o.klusterletChartConfig.Klusterlet.ClusterName)
 		if err != nil {
 			return err
 		}
@@ -520,7 +520,7 @@ func checkIfRegistrationOperatorAvailable(f util.Factory) (bool, error) {
 	return meta.IsStatusConditionTrue(conds, "Available"), nil
 }
 
-func (o *Options) waitUntilManagedClusterIsCreated(timeout int64, clusterName string) error {
+func (o *Options) waitUntilManagedClusterIsCreated(ctx context.Context, timeout int64, clusterName string) error {
 	// Create an unsecure bootstrap
 	bootstrapExternalConfigUnSecure := o.createExternalBootstrapConfig()
 	restConfig, err := helpers.CreateRESTConfigFromClientcmdapiv1Config(bootstrapExternalConfigUnSecure)
@@ -545,10 +545,13 @@ func (o *Options) waitUntilManagedClusterIsCreated(timeout int64, clusterName st
 	operatorSpinner.Start()
 	defer operatorSpinner.Stop()
 
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
 	return helpers.WatchUntil(
+		ctx,
 		func() (watch.Interface, error) {
 			w, err := clusterClient.ClusterV1().ManagedClusters().
-				Watch(context.TODO(), metav1.ListOptions{
+				Watch(ctx, metav1.ListOptions{
 					TimeoutSeconds: &timeout,
 					FieldSelector:  fmt.Sprintf("metadata.name=%s", clusterName),
 				})
@@ -566,7 +569,7 @@ func (o *Options) waitUntilManagedClusterIsCreated(timeout int64, clusterName st
 		})
 }
 
-func waitUntilRegistrationOperatorConditionIsTrue(w io.Writer, f util.Factory, timeout int64) error {
+func waitUntilRegistrationOperatorConditionIsTrue(ctx context.Context, w io.Writer, f util.Factory, timeout int64) error {
 	var restConfig *rest.Config
 	restConfig, err := f.ToRESTConfig()
 	if err != nil {
@@ -590,10 +593,13 @@ func waitUntilRegistrationOperatorConditionIsTrue(w io.Writer, f util.Factory, t
 	operatorSpinner.Start()
 	defer operatorSpinner.Stop()
 
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
 	return helpers.WatchUntil(
+		ctx,
 		func() (watch.Interface, error) {
 			return client.CoreV1().Pods(OperatorNamespace).
-				Watch(context.TODO(), metav1.ListOptions{
+				Watch(ctx, metav1.ListOptions{
 					TimeoutSeconds: &timeout,
 					LabelSelector:  "app=klusterlet",
 				})
@@ -619,7 +625,7 @@ func waitUntilRegistrationOperatorConditionIsTrue(w io.Writer, f util.Factory, t
 
 // Wait until the klusterlet condition available=true, or timeout in $timeout seconds
 func waitUntilKlusterletConditionIsTrue(
-	w io.Writer, client operatorclient.Interface, timeout int64, klusterletName string) error {
+	ctx context.Context, w io.Writer, client operatorclient.Interface, timeout int64, klusterletName string) error {
 	phase := &atomic.Value{}
 	phase.Store("")
 	klusterletSpinner := printer.NewSpinnerWithStatus(
@@ -633,10 +639,13 @@ func waitUntilKlusterletConditionIsTrue(
 	klusterletSpinner.Start()
 	defer klusterletSpinner.Stop()
 
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
 	return helpers.WatchUntil(
+		ctx,
 		func() (watch.Interface, error) {
 			return client.OperatorV1().Klusterlets().
-				Watch(context.TODO(), metav1.ListOptions{
+				Watch(ctx, metav1.ListOptions{
 					TimeoutSeconds: &timeout,
 					FieldSelector:  fmt.Sprintf("metadata.name=%s", klusterletName),
 				})

@@ -225,14 +225,14 @@ func (o *Options) validate() error {
 	return nil
 }
 
-func (o *Options) run() error {
+func (o *Options) run(ctx context.Context) error {
 	kubeClient, apiExtensionsClient, _, err := helpers.GetClients(o.ClusteradmFlags.KubectlFactory)
 	if err != nil {
 		return err
 	}
 
 	if o.singleton {
-		err = o.deploySingletonControlplane(kubeClient)
+		err = o.deploySingletonControlplane(ctx, kubeClient)
 		if err != nil {
 			return err
 		}
@@ -292,6 +292,7 @@ func (o *Options) run() error {
 
 		if o.wait && !o.ClusteradmFlags.DryRun {
 			if err := helperwait.WaitUntilRegistrationOperatorReady(
+				ctx,
 				o.Streams.Out,
 				o.ClusteradmFlags.KubectlFactory,
 				int64(o.ClusteradmFlags.Timeout),
@@ -302,6 +303,7 @@ func (o *Options) run() error {
 
 		if o.wait && !o.ClusteradmFlags.DryRun {
 			if err := helperwait.WaitUntilClusterManagerRegistrationReady(
+				ctx,
 				o.Streams.Out,
 				o.ClusteradmFlags.KubectlFactory,
 				int64(o.ClusteradmFlags.Timeout)); err != nil {
@@ -387,7 +389,7 @@ func (o *Options) run() error {
 	return nil
 }
 
-func (o *Options) deploySingletonControlplane(kubeClient kubernetes.Interface) error {
+func (o *Options) deploySingletonControlplane(ctx context.Context, kubeClient kubernetes.Interface) error {
 	// create namespace
 	_, err := kubeClient.CoreV1().Namespaces().Get(context.TODO(), o.SingletonName, metav1.GetOptions{})
 	if err != nil {
@@ -415,6 +417,7 @@ func (o *Options) deploySingletonControlplane(kubeClient kubernetes.Interface) e
 	// fetch the kubeconfig and get the token
 	if o.wait && !o.ClusteradmFlags.DryRun {
 		if err := helperwait.WaitUntilMulticlusterControlplaneReady(
+			ctx,
 			o.Streams.Out,
 			o.ClusteradmFlags.KubectlFactory,
 			o.SingletonName,

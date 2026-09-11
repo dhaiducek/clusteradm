@@ -92,7 +92,7 @@ func (o *Options) validate() (err error) {
 	return nil
 }
 
-func (o *Options) run() error {
+func (o *Options) run(ctx context.Context) error {
 	r := reader.NewResourceReader(o.ClusteradmFlags.KubectlFactory, o.ClusteradmFlags.DryRun, o.Streams)
 
 	_, apiExtensionsClient, _, err := helpers.GetClients(o.ClusteradmFlags.KubectlFactory)
@@ -125,6 +125,7 @@ func (o *Options) run() error {
 
 	if o.wait && !o.ClusteradmFlags.DryRun {
 		if err := wait.WaitUntilRegistrationOperatorReady(
+			ctx,
 			o.Streams.Out,
 			o.ClusteradmFlags.KubectlFactory,
 			int64(o.ClusteradmFlags.Timeout),
