@@ -68,7 +68,7 @@ func GetClients(f util.Factory) (
 }
 
 // WaitCRDToBeReady waits if a crd is ready
-func WaitCRDToBeReady(apiExtensionsClient apiextensionsclient.Interface, name string, b wait.Backoff, wait bool) error {
+func WaitCRDToBeReady(ctx context.Context, apiExtensionsClient apiextensionsclient.Interface, name string, b wait.Backoff, wait bool) error {
 	errGet := retry.OnError(b, func(err error) bool {
 		if err != nil {
 			if wait {
@@ -79,7 +79,7 @@ func WaitCRDToBeReady(apiExtensionsClient apiextensionsclient.Interface, name st
 		return false
 	}, func() error {
 		crd, err := apiExtensionsClient.ApiextensionsV1().CustomResourceDefinitions().
-			Get(context.TODO(),
+			Get(ctx,
 				name,
 				metav1.GetOptions{})
 		if established := apiextensionshelpers.IsCRDConditionTrue(crd, apiextensionsv1.Established); !established {
@@ -204,6 +204,7 @@ func IsKlusterletsInstalled(apiExtensionsClient apiextensionsclient.Interface) (
 
 // WatchUntil starts a watch stream and holds until the condition is satisfied.
 func WatchUntil(
+	_ context.Context,
 	watchFunc func() (watch.Interface, error),
 	assertEvent func(event watch.Event) bool) error {
 	w, err := watchFunc()
