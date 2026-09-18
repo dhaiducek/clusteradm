@@ -3,6 +3,8 @@ package wait
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -67,13 +69,7 @@ func WaitUntilRegistrationOperatorReady(ctx context.Context, w io.Writer, f util
 
 	err = waitUntilPodsReady(ctx, client, "open-cluster-management",
 		fmt.Sprintf("%v=%v", config.LabelApp, appLabel), timeout, phase)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("timed out waiting for registration operator to become ready")
-		}
-		return err
-	}
-	return nil
+	return TimeoutError(err, phase, "timed out waiting for registration operator to become ready")
 }
 
 //nolint:revive
@@ -104,13 +100,7 @@ func WaitUntilClusterManagerRegistrationReady(ctx context.Context, w io.Writer, 
 
 	err = waitUntilPodsReady(ctx, client, "open-cluster-management-hub",
 		"app=clustermanager-registration-controller", timeout, phase)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("timed out waiting for cluster manager registration to become ready")
-		}
-		return err
-	}
-	return nil
+	return TimeoutError(err, phase, "timed out waiting for cluster manager registration to become ready")
 }
 
 //nolint:revive
@@ -140,13 +130,7 @@ func WaitUntilMulticlusterControlplaneReady(ctx context.Context, w io.Writer, f 
 	defer clusterManagerSpinner.Stop()
 
 	err = waitUntilPodsReady(ctx, client, ns, "app=multicluster-controlplane", timeout, phase)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("timed out waiting for multicluster controlplane to become ready")
-		}
-		return err
-	}
-	return nil
+	return TimeoutError(err, phase, "timed out waiting for multicluster controlplane to become ready")
 }
 
 //nolint:revive
@@ -174,13 +158,70 @@ func WaitUntilMulticlusterControlplaneKubeconfigReady(ctx context.Context, f uti
 	return errGet
 }
 
-// IsFatalAPIError reports whether err is an API error that will not resolve by retrying.
+// IsFatalAPIError reports whether err will not resolve by retrying.
 func IsFatalAPIError(err error) bool {
+	if err == nil {
+		return false
+	}
 	return k8serrors.IsForbidden(err) ||
 		k8serrors.IsUnauthorized(err) ||
 		k8serrors.IsInvalid(err) ||
 		k8serrors.IsBadRequest(err) ||
-		k8serrors.IsMethodNotSupported(err)
+		k8serrors.IsMethodNotSupported(err) ||
+		isFatalTransportError(err)
+}
+
+// HandlePollError classifies err for a wait.PollUntilContextTimeout condition.
+// Fatal errors abort the wait. Retryable errors are stored in status so spinners
+// can show why polling is still running. Context cancellation and deadline are
+// left to the poller via ctx.Done().
+func HandlePollError(err error, status *atomic.Value) (bool, error) {
+	if err == nil {
+		return false, nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false, nil
+	}
+	if IsFatalAPIError(err) {
+		return false, err
+	}
+	if status != nil {
+		status.Store(err.Error())
+	}
+	return false, nil
+}
+
+// TimeoutError returns a timeout message that includes the last spinner status
+// when err is a deadline. Other errors are returned unchanged. A nil err returns nil.
+func TimeoutError(err error, status *atomic.Value, format string, a ...any) error {
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	msg := fmt.Sprintf(format, a...)
+	if status != nil {
+		if s, ok := status.Load().(string); ok && s != "" {
+			return fmt.Errorf("%s (%s)", msg, s)
+		}
+	}
+	return fmt.Errorf("%s", msg)
+}
+
+func isFatalTransportError(err error) bool {
+	var (
+		unknownAuthority x509.UnknownAuthorityError
+		hostname         x509.HostnameError
+		certInvalid      x509.CertificateInvalidError
+		systemRoots      x509.SystemRootsError
+		certVerify       *tls.CertificateVerificationError
+	)
+	return errors.As(err, &unknownAuthority) ||
+		errors.As(err, &hostname) ||
+		errors.As(err, &certInvalid) ||
+		errors.As(err, &systemRoots) ||
+		errors.As(err, &certVerify)
 }
 
 func waitUntilPodsReady(ctx context.Context, client kubernetes.Interface, namespace, labelSelector string, timeout int64, phase *atomic.Value) error {
@@ -189,10 +230,7 @@ func waitUntilPodsReady(ctx context.Context, client kubernetes.Interface, namesp
 			LabelSelector: labelSelector,
 		})
 		if err != nil {
-			if IsFatalAPIError(err) {
-				return false, err
-			}
-			return false, nil
+			return HandlePollError(err, phase)
 		}
 		for i := range pods.Items {
 			pod := &pods.Items[i]
