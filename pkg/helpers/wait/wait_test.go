@@ -2,97 +2,114 @@
 package wait
 
 import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"net"
+	"net/url"
 	"sync/atomic"
 	"testing"
 
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/watch"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-func TestPodReadyEventHandler(t *testing.T) {
-	cases := []struct {
-		name      string
-		object    runtime.Object
-		wantReady bool
-		wantPhase string
+func TestIsFatalAPIError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
 	}{
+		{name: "nil", err: nil, want: false},
+		{name: "not found", err: k8serrors.NewNotFound(schema.GroupResource{Resource: "pods"}, "name"), want: false},
+		{name: "forbidden", err: k8serrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "name", errors.New("no")), want: true},
+		{name: "unauthorized", err: k8serrors.NewUnauthorized("no"), want: true},
+		{name: "bad request", err: k8serrors.NewBadRequest("bad"), want: true},
+		{name: "method not supported", err: k8serrors.NewMethodNotSupported(schema.GroupResource{Resource: "pods"}, "connect"), want: true},
+		{name: "connection refused", err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, want: false},
+		{name: "deadline exceeded", err: context.DeadlineExceeded, want: false},
 		{
-			name:      "non pod object is ignored",
-			object:    &corev1.ConfigMap{},
-			wantReady: false,
-			wantPhase: "",
+			name: "x509 unknown authority",
+			err:  &url.Error{Op: "Get", URL: "https://hub.example", Err: x509.UnknownAuthorityError{}},
+			want: true,
 		},
 		{
-			name: "pod without ready condition is not ready",
-			object: &corev1.Pod{
-				Status: corev1.PodStatus{
-					Phase: corev1.PodPending,
-				},
-			},
-			wantReady: false,
-			wantPhase: "Pending",
+			name: "x509 hostname",
+			err:  x509.HostnameError{Host: "hub.example"},
+			want: true,
 		},
 		{
-			name: "pod with ready condition false is not ready",
-			object: &corev1.Pod{
-				Status: corev1.PodStatus{
-					Phase: corev1.PodRunning,
-					Conditions: []corev1.PodCondition{
-						{Type: corev1.PodReady, Status: corev1.ConditionFalse},
-					},
-				},
-			},
-			wantReady: false,
-			wantPhase: "Running",
-		},
-		{
-			name: "pod with ready condition true is ready",
-			object: &corev1.Pod{
-				Status: corev1.PodStatus{
-					Phase: corev1.PodRunning,
-					Conditions: []corev1.PodCondition{
-						{Type: corev1.PodInitialized, Status: corev1.ConditionTrue},
-						{Type: corev1.PodReady, Status: corev1.ConditionTrue},
-					},
-				},
-			},
-			wantReady: true,
-			wantPhase: "Running",
-		},
-		{
-			name: "waiting container status overrides phase in reported status",
-			object: &corev1.Pod{
-				Status: corev1.PodStatus{
-					Phase: corev1.PodPending,
-					ContainerStatuses: []corev1.ContainerStatus{
-						{
-							State: corev1.ContainerState{
-								Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff"},
-							},
-						},
-					},
-				},
-			},
-			wantReady: false,
-			wantPhase: "ImagePullBackOff",
+			name: "tls certificate verification",
+			err:  &tls.CertificateVerificationError{Err: errors.New("failed to verify certificate")},
+			want: true,
 		},
 	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			phase := &atomic.Value{}
-			phase.Store("")
-			handler := podReadyEventHandler(phase)
-
-			got := handler(watch.Event{Type: watch.Modified, Object: c.object})
-
-			if got != c.wantReady {
-				t.Errorf("expected ready=%v, got %v", c.wantReady, got)
-			}
-			if phase.Load().(string) != c.wantPhase {
-				t.Errorf("expected phase=%q, got %q", c.wantPhase, phase.Load().(string))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := IsFatalAPIError(tt.err); got != tt.want {
+				t.Fatalf("IsFatalAPIError() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestHandlePollError(t *testing.T) {
+	t.Parallel()
+
+	retryable := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	status := &atomic.Value{}
+	status.Store("")
+	done, err := HandlePollError(retryable, status)
+	if done || err != nil {
+		t.Fatalf("HandlePollError() retryable = (%v, %v), want (false, nil)", done, err)
+	}
+	if got := status.Load().(string); got != retryable.Error() {
+		t.Fatalf("HandlePollError() status = %q, want %q", got, retryable.Error())
+	}
+
+	forbidden := k8serrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "name", errors.New("no"))
+	done, err = HandlePollError(forbidden, status)
+	if done || err == nil {
+		t.Fatalf("HandlePollError() forbidden = (%v, %v), want (false, forbidden)", done, err)
+	}
+
+	done, err = HandlePollError(context.DeadlineExceeded, status)
+	if done || err != nil {
+		t.Fatalf("HandlePollError() deadline = (%v, %v), want (false, nil)", done, err)
+	}
+
+	done, err = HandlePollError(nil, status)
+	if done || err != nil {
+		t.Fatalf("HandlePollError() nil = (%v, %v), want (false, nil)", done, err)
+	}
+}
+
+func TestTimeoutError(t *testing.T) {
+	t.Parallel()
+
+	if err := TimeoutError(nil, nil, "timed out waiting"); err != nil {
+		t.Fatalf("TimeoutError(nil) = %v, want nil", err)
+	}
+
+	other := errors.New("boom")
+	if err := TimeoutError(other, nil, "timed out waiting"); err != other {
+		t.Fatalf("TimeoutError(other) = %v, want original error", err)
+	}
+
+	err := TimeoutError(context.DeadlineExceeded, nil, "timed out waiting")
+	if err == nil || err.Error() != "timed out waiting" {
+		t.Fatalf("TimeoutError(deadline, empty) = %v, want timed out waiting", err)
+	}
+
+	status := &atomic.Value{}
+	status.Store("connection refused")
+	err = TimeoutError(context.DeadlineExceeded, status, "timed out waiting for %s", "operator")
+	want := "timed out waiting for operator (connection refused)"
+	if err == nil || err.Error() != want {
+		t.Fatalf("TimeoutError() = %v, want %s", err, want)
 	}
 }
