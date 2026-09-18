@@ -18,7 +18,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -174,15 +173,13 @@ func IsClusterManagerInstalled(apiExtensionsClient apiextensionsclient.Interface
 	_, err := apiExtensionsClient.ApiextensionsV1().
 		CustomResourceDefinitions().
 		Get(context.TODO(), "clustermanagers.operator.open-cluster-management.io", metav1.GetOptions{})
-	if err == nil {
-		return true, nil
-	}
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return false, nil
 		}
+		return false, err
 	}
-	return false, err
+	return true, nil
 }
 
 // IsKlusterlets checks if the Managed cluster is already initialized.
@@ -191,76 +188,13 @@ func IsKlusterletsInstalled(apiExtensionsClient apiextensionsclient.Interface) (
 	_, err := apiExtensionsClient.ApiextensionsV1().
 		CustomResourceDefinitions().
 		Get(context.TODO(), "klusterlets.operator.open-cluster-management.io", metav1.GetOptions{})
-	if err == nil {
-		return true, nil
-	}
 	if err != nil {
 		if errors.IsNotFound(err) {
 			return false, nil
 		}
+		return false, err
 	}
-	return false, err
-}
-
-// WatchUntil starts a watch stream and holds until the condition is satisfied
-// or ctx is done. Kubernetes watch streams can close for reasons other than the
-// intended wait timeout (API server timeouts, dropped connections, Error
-// events). Those are retried until the parent context is canceled or its
-// deadline expires.
-func WatchUntil(
-	ctx context.Context,
-	watchFunc func() (watch.Interface, error),
-	assertEvent func(event watch.Event) bool) error {
-	for {
-		if err := ctx.Err(); err != nil {
-			return watchCtxError(err)
-		}
-
-		w, err := watchFunc()
-		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return watchCtxError(ctxErr)
-			}
-			return err
-		}
-
-		matched, err := consumeWatch(ctx, w, assertEvent)
-		w.Stop()
-		if matched {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		// Channel closed or Error event; retry while the parent context remains.
-	}
-}
-
-// consumeWatch reads events until the condition matches, the watch ends, or
-// ctx is done. A match returns (true, nil). A closed channel or Error event
-// returns (false, nil) so the caller can start a new watch. Context
-// cancellation or deadline expiry is returned as a wrapped ctx.Err().
-func consumeWatch(ctx context.Context, w watch.Interface, assertEvent func(event watch.Event) bool) (bool, error) {
-	for {
-		select {
-		case <-ctx.Done():
-			return false, watchCtxError(ctx.Err())
-		case event, ok := <-w.ResultChan():
-			if !ok || event.Type == watch.Error {
-				return false, nil
-			}
-			if assertEvent(event) {
-				return true, nil
-			}
-		}
-	}
-}
-
-func watchCtxError(err error) error {
-	if err == context.Canceled {
-		return fmt.Errorf("watch canceled: %w", err)
-	}
-	return fmt.Errorf("watch timed out: %w", err)
+	return true, nil
 }
 
 // CreateRESTConfigFromClientcmdapiv1Config
