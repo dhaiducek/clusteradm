@@ -20,7 +20,7 @@ import (
 const placementLabel = "cluster.open-cluster-management.io/placement"
 
 func (o *Options) complete(_ *cobra.Command, _ []string) (err error) {
-	o.printer.Competele()
+	o.printer.Complete()
 
 	return nil
 }
@@ -84,15 +84,15 @@ func (o *Options) run(ctx context.Context) (err error) {
 		return err
 	}
 
-	o.printer.WithTreeConverter(o.convertToTree).WithTableConverter(o.converToTable)
+	o.printer.WithTreeConverter(o.convertToTree).WithTableConverter(o.convertToTable)
 
 	return o.printer.Print(o.Streams, placementList)
 }
 
-func (o *Options) convertToTree(obj runtime.Object, tree *printer.TreePrinter) *printer.TreePrinter {
+func (o *Options) convertToTree(obj runtime.Object, tree *printer.TreePrinter) (*printer.TreePrinter, error) {
 	decisionList, err := o.Client.PlacementDecisions(o.Namespace).List(o.ctx, metav1.ListOptions{})
 	if err != nil {
-		panic(fmt.Errorf("failed to list placement decisions: %w", err))
+		return nil, fmt.Errorf("failed to list placement decisions: %w", err)
 	}
 
 	// save decisions into a map
@@ -105,7 +105,7 @@ func (o *Options) convertToTree(obj runtime.Object, tree *printer.TreePrinter) *
 	if placementList, ok := obj.(*v1beta1.PlacementList); ok {
 		for _, pla := range placementList.Items {
 			mp := make(map[string]interface{})
-			namespace, clusterset, satisfied, misconfig, number, decision := getFileds(pla, selectedClusters)
+			namespace, clusterset, satisfied, misconfig, number, decision := getFields(pla, selectedClusters)
 			mp[".Namespace"] = namespace
 			mp[".ClusterSet"] = clusterset
 			mp[".Status.NumberOfSelectedClusters"] = number
@@ -117,10 +117,10 @@ func (o *Options) convertToTree(obj runtime.Object, tree *printer.TreePrinter) *
 		}
 	}
 
-	return tree
+	return tree, nil
 }
 
-func getFileds(placement v1beta1.Placement, selectedClusters map[string][]v1beta1.ClusterDecision) (namespace string, clusterset []string, satisfied string, misconfig string, number int, decision []string) {
+func getFields(placement v1beta1.Placement, selectedClusters map[string][]v1beta1.ClusterDecision) (namespace string, clusterset []string, satisfied string, misconfig string, number int, decision []string) {
 	namespace = placement.Namespace
 	clusterset = placement.Spec.ClusterSets
 
@@ -153,10 +153,10 @@ func getFileds(placement v1beta1.Placement, selectedClusters map[string][]v1beta
 	return namespace, clusterset, satisfied, misconfig, number, decision
 }
 
-func (o *Options) converToTable(obj runtime.Object) *metav1.Table {
+func (o *Options) convertToTable(obj runtime.Object) (*metav1.Table, error) {
 	decisionList, err := o.Client.PlacementDecisions(o.Namespace).List(o.ctx, metav1.ListOptions{})
 	if err != nil {
-		panic(fmt.Errorf("failed to list placement decisions: %w", err))
+		return nil, fmt.Errorf("failed to list placement decisions: %w", err)
 	}
 
 	// save decisions into a map
@@ -188,7 +188,7 @@ func (o *Options) converToTable(obj runtime.Object) *metav1.Table {
 		}
 	}
 
-	return table
+	return table, nil
 }
 
 func convertRow(placement v1beta1.Placement, clusters []string) metav1.TableRow {
